@@ -1,0 +1,67 @@
+name: CDK Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION != '' && secrets.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: whoami
+        run: aws sts get-caller-identity
+
+      - name: Install root deps
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          fi
+
+      - name: Determine CDK directory
+        run: |
+          if [ -d infra/cdk ]; then
+            echo "CDK_DIR=infra/cdk" >> "$GITHUB_ENV"
+          elif [ -d infra ]; then
+            echo "CDK_DIR=infra" >> "$GITHUB_ENV"
+          else
+            echo "::error::No infra or infra/cdk directory found"
+            exit 1
+          fi
+
+      - name: Install CDK deps
+        working-directory: ${{ env.CDK_DIR }}
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          fi
+
+      - name: CDK synth
+        working-directory: ${{ env.CDK_DIR }}
+        run: npx cdk synth
+
+      - name: CDK bootstrap (idempotent)
+        working-directory: ${{ env.CDK_DIR }}
+        run: npx cdk bootstrap || true
+
+      - name: CDK deploy
+        working-directory: ${{ env.CDK_DIR }}
+        run: npx cdk deploy --require-approval never
